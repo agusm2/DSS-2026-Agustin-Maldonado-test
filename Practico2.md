@@ -8,7 +8,7 @@ Esta vulnerabilidad tiene lugar ya que la entrada del usuario se inyecta en la c
 
 ## Prueba de concepto (PoC)
 
-### Pasos para explotar
+### Pasos para explotar vulnerabilidad
 1. Ingresar '-- en el buscador
 2. Ejecutar busqueda
 
@@ -67,37 +67,63 @@ El ataque ya no funciona porque la consulta está parametrizada. De esta forma, 
 
 ## Vulnerabilidad encontrada
 
-Explicación de dónde está y por qué ocurre.
+La vulnerabilidad se encuentra en el archivo edit.html, especificamente en la línea 86. 
+Al implementar el filtro safe de Jinja en el campo de descripción, no se aplica el autoescapado sobre ese valor; permitiendo que un atacante pueda ingresar código HTML que va a ser renderizado posteriormente.
+
 
 ## Prueba de concepto (PoC)
 
-### Pasos para explotar
-1. ...
-2. ...
-3. ...
+### Pasos para explotar vulnerabilidad
+1. Buscar una película, por ejemplo "Dune"
+2. En el apartado de "Descripción", clickear "Editar"
+3. Ingresar payload (código HTML) en la sección de descripción
+4. Hacer click en "Guardar cambios"
+5. Buscar nuevamente la película editada
+6. Pasar el cursor sobre el texto ingresado
 
 ### Payload utilizado
-...
 
-### Resultado
-...
+```html
+<b onmouseover=alert("Hola!")>Esto tendría que describir a la película.</b>
+```
+
+### Resultado de la explotación
+
+Como resultado, cada vez que el cursor pasa por encima del texto en la descripción, la página ejecuta código JavaScript, emitiendo un cartel con la alerta ingresada previamente en la misma descripción.
 
 ## Mitigación
 
-Explicación de los cambios realizados.
+Para mitigar esta vulnerabilidad, podemos eliminar el filtro de "safe" dentro del campo de descripción; de esta forma, Jinja aplica el mecanismo de autoescaping en esta sección, por lo que el código ingresado no se va a renderizar, sino que se va a mostrar como si fuera texto plano.
 
 ### Código vulnerable
-...
+```html
+<label for="descripcion">Descripción</label>
+{% if pelicula['descripcion'] %}
+    <div class="prev-descripcion">
+        <strong>Descripción actual:</strong><br>
+        {{ pelicula['descripcion'] | safe }}
+    </div>
+{% endif %}
+<textarea id="descripcion" name="descripcion">{{ pelicula['descripcion'] }}</textarea>
+```
 
 ### Código mitigado
-...
+```html
+<label for="descripcion">Descripción</label>
+{% if pelicula['descripcion'] %}
+    <div class="prev-descripcion">
+        <strong>Descripción actual:</strong><br>
+        {{ pelicula['descripcion'] }}
+    </div>
+{% endif %}
+<textarea id="descripcion" name="descripcion">{{ pelicula['descripcion'] }}</textarea>
+```
 
 ## Verificación de la mitigación
 
-Se repitió la PoC original con el mismo payload.
+Se repitió la PoC original con el mismo payload; ahora el mismo aparece como texto plano y no figura ninguna alerta, evitando la ejecución de código JavaScript.
 
-### Resultado
-El ataque ya no funciona porque...
+El ataque ya no funciona por el hecho de que se eliminó el filtro "safe" en el campo de Descripción, de esta manera, Jinja no asume que el código es seguro y aplica autoescaping, escapando los carcteres especiales utilizados en HTML, como '<' y '>' en este caso.
 
 ---
 # Ejercicio 3 - File Upload
@@ -218,3 +244,6 @@ El ataque ya no funciona porque...
 - https://portswigger.net/web-security/learning-paths/sql-injection
 - https://bobby-tables.com/python 
 
+### Ejercicio 2
+- https://owasp.org/www-community/attacks/xss/
+- https://flask.palletsprojects.com/es/stable/templating/
