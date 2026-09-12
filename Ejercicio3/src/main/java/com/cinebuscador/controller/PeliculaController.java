@@ -23,6 +23,13 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Iterator;
+import java.util.UUID;
+import java.util.Locale;
+
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 
 @Controller
 public class PeliculaController {
@@ -35,6 +42,74 @@ public class PeliculaController {
     public PeliculaController(PeliculaRepository peliculaRepo) {
         this.peliculaRepo = peliculaRepo;
     }
+
+    private boolean extensionPermitida(String filename) {
+        if(filename == null || filename.isBlank()) {
+            return false;
+        }
+
+        String[] extensionesPermitidas = {".jpg", ".jpeg", ".png"};
+        for (String ext : extensionesPermitidas) {
+            if (filename.toLowerCase().endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean mimePermitido(MultipartFile archivo) {
+        String contentType = archivo.getContentType();
+
+        if(contentType == null) {
+            return false;
+        }
+
+        String[] mimesPermitidos = {"image/jpeg", "image/png"};
+        for (String mime : mimesPermitidos) {
+            if (contentType.equalsIgnoreCase(mime)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    private boolean contenidoImagenValido(MultipartFile archivo) throws IOException {
+        try (ImageInputStream imageStream = 
+                ImageIO.createImageInputStream(archivo.getInputStream())) {
+            
+            if(imageStream == null) {
+                return false;
+            }
+
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(imageStream);
+
+            if(!readers.hasNext()) {
+                return false;
+            }
+
+            ImageReader reader = readers.next();
+
+            try{
+                // Configura el ImageReader para leer la imagen
+                reader.setInput(imageStream);
+                reader.read(0); // Intenta leer la primera imagen
+                return true; // Si no lanza excepción, es una imagen válida
+            } catch (IOException e) {
+                return false; // No es una imagen válida
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    private String generarNombreSeguro(String filename){
+        int ultimoPunto = filename.lastIndexOf('.');
+
+        String extension = filename.substring(ultimoPunto).toLowerCase(Locale.ROOT);
+
+        return UUID.randomUUID().toString() + extension;
+    }
+
 
     @GetMapping("/")
     public String index(@RequestParam(required = false) String buscar,
@@ -86,13 +161,29 @@ public class PeliculaController {
             .orElseThrow(() -> new EntityNotFoundException("Pelicula no encontrada"));
 
         String filename = archivo.getOriginalFilename();
+
+        if(!extensionPermitida(filename)) {
+            throw new IllegalArgumentException("Extensión de archivo no permitida");
+        }
+
+        if(!mimePermitido(archivo)) {
+            throw new IllegalArgumentException("Tipo MIME no permitido");
+        }
+
+        if(!contenidoImagenValido(archivo)) {
+            throw new IllegalArgumentException("Contenido del archivo no es una imagen válida");
+        }
+
+        String filenameSeguro = generarNombreSeguro(filename);
+
         Path uploadPath = Paths.get(uploadDir);
+
         if (!Files.exists(uploadPath)) {
             Files.createDirectories(uploadPath);
         }
-        Files.copy(archivo.getInputStream(), uploadPath.resolve(filename));
+        Files.copy(archivo.getInputStream(), uploadPath.resolve(filenameSeguro));
 
-        pelicula.setAfichePath(filename);
+        pelicula.setAfichePath(filenameSeguro);
         peliculaRepo.save(pelicula);
 
         return "redirect:/";

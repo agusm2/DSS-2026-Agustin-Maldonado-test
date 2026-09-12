@@ -130,37 +130,202 @@ El ataque ya no funciona por el hecho de que se eliminó el filtro "safe" en el 
 
 ## Vulnerabilidad encontrada
 
-Explicación de dónde está y por qué ocurre.
+La vulnerabilidad se encuentra en los archivos upload.html y PeliculaController.java.
+Por el lado de upload.html, se puede detectar que la vulnerabilidad se encuentra dentro del form que sube el afiche a la aplicación en la línea 43; específicamente a la hora de permitir cualquier tipo de archivo como entrada.
+En cuanto a PeliculaController, podemos detectar la vulnerabilidad dentro del POST con la ruta "/upload/{id}" en la línea 88; específicamente cuando la aplicación toma el nombre del archivo y no aplica ninguna validación, simplemente se asegura de que el mismo exista.
 
 ## Prueba de concepto (PoC)
 
-### Pasos para explotar
-1. ...
-2. ...
-3. ...
+### Pasos para explotar vulnerabilidad
+1. Crear archivo .html con una alerta dentro
+2. Buscar película
+3. Ingresar a "Subir afiche"
+4. Seleccionar archivo .html creado previamente
+5. Hacer click en "Subir afiche"
+6. Ingresar a la siguiente ruta: "http://127.0.0.1:8080/uploads/nombreArchivo.html"
 
 ### Payload utilizado
-...
+afiche.html
+```html
+<script>alert("Aca no esta el afiche")</script>
+```
+### Resultado de la explotación
 
-### Resultado
-...
+Como resultado, al ingresar a "http://127.0.0.1:8080/uploads/afiche.html" nos salta la alerta mencionada en el payload.
 
 ## Mitigación
 
-Explicación de los cambios realizados.
+En el archivo de upload.html, se modificó el campo de accept en el form que carga el afiche, de esta manera, solamente permite archivos de tipo imagen como pueden ser .png, .jpg y .jpeg.
+Por otra parte, en PeliculaController.java, se introducieron diversas validaciones:
+- Se creó una allowlist con extensiones permitidas, siendo las mismas que las introducidas en upload.html
+- Se validó el tipo MIME del archivo para comprobar que corresponda a una formato de imagen permitido
+- Se verificó que el contenido real del archivo pueda ser interpretado como una imagen válida, evitando confiar únicamente en su nombre o extensión
+- Se generó un nombre de forma aleatoria, para evitar riesgos asociados a nombres manipulados.
 
 ### Código vulnerable
-...
+- upload.html
+```html
+<div class="upload-form">
+    <form method="post"
+          th:action="@{/upload/{id}(id=${pelicula.id})}" enctype="multipart/form-data">
+        <label for="afiche">Seleccionar archivo:</label>
+        <input type="file" name="afiche" id="afiche" accept="*/*" required>
+        <br><br>
+        <button type="submit">Subir afiche</button>
+    </form>
+
+    <a href="/" class="back-link">&#8592; Volver al buscador</a>
+</div>
+```
+
+- PeliculaController.java
+```java
+    @PostMapping("/upload/{id}")
+    public String uploadFile(@PathVariable Integer id,
+                             @RequestParam("afiche") MultipartFile archivo) throws IOException {
+        Pelicula pelicula = peliculaRepo.findById(id)
+            .orElseThrow(() -> new EntityNotFoundException("Pelicula no encontrada"));
+
+        String filename = archivo.getOriginalFilename();
+        Path uploadPath = Paths.get(uploadDir);
+        if (!Files.exists(uploadPath)) {
+            Files.createDirectories(uploadPath);
+        }
+        Files.copy(archivo.getInputStream(), uploadPath.resolve(filename));
+
+        pelicula.setAfichePath(filename);
+        peliculaRepo.save(pelicula);
+
+        return "redirect:/";
+    }
+```
 
 ### Código mitigado
-...
+- upload.html
+```html
+<div class="upload-form">
+    <form method="post"
+          th:action="@{/upload/{id}(id=${pelicula.id})}" enctype="multipart/form-data">
+        <label for="afiche">Seleccionar archivo:</label>
+        <input type="file" name="afiche" id="afiche" accept=".png, .jpg, .jpeg" required>
+        <br><br>
+        <button type="submit">Subir afiche</button>
+    </form>
+
+    <a href="/" class="back-link">&#8592; Volver al buscador</a>
+</div>
+```
+
+- PeliculaController.java
+```java
+    private boolean extensionPermitida(String filename) {
+        if(filename == null || filename.isBlank()) {
+            return false;
+        }
+
+        String[] extensionesPermitidas = {".jpg", ".jpeg", ".png"};
+        for (String ext : extensionesPermitidas) {
+            if (filename.toLowerCase().endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean mimePermitido(MultipartFile archivo) {
+        String contentType = archivo.getContentType();
+
+        if(contentType == null) {
+            return false;
+        }
+
+        String[] mimesPermitidos = {"image/jpeg", "image/png", "image/gif"};
+        for (String mime : mimesPermitidos) {
+            if (contentType.equalsIgnoreCase(mime)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    private boolean contenidoImagenValido(MultipartFile archivo) throws IOException {
+        try (ImageInputStream imageStream = 
+                ImageIO.createImageInputStream(archivo.getInputStream())) {
+            
+            if(imageStream == null) {
+                return false;
+            }
+
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(imageStream);
+
+            if(!readers.hasNext()) {
+                return false;
+            }
+
+            ImageReader reader = readers.next();
+
+            try{
+                // Configura el ImageReader para leer la imagen
+                reader.setInput(imageStream);
+                reader.read(0); // Intenta leer la primera imagen
+                return true; // Si no lanza excepción, es una imagen válida
+            } catch (IOException e) {
+                return false; // No es una imagen válida
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    private String generarNombreSeguro(String filename){
+        int ultimoPunto = filename.lastIndexOf('.');
+
+        String extension = filename.substring(ultimoPunto).toLowerCase(Locale.ROOT);
+
+        return UUID.randomUUID().toString() + extension;
+    }
+
+    @PostMapping("/upload/{id}")
+    public String uploadFile(@PathVariable Integer id,
+                             @RequestParam("afiche") MultipartFile archivo) throws IOException {
+        Pelicula pelicula = peliculaRepo.findById(id)
+            .orElseThrow(() -> new EntityNotFoundException("Pelicula no encontrada"));
+
+        String filename = archivo.getOriginalFilename();
+
+        if(!extensionPermitida(filename)) {
+            throw new IllegalArgumentException("Extensión de archivo no permitida");
+        }
+
+        if(!mimePermitido(archivo)) {
+            throw new IllegalArgumentException("Tipo MIME no permitido");
+        }
+
+        if(!contenidoImagenValido(archivo)) {
+            throw new IllegalArgumentException("Contenido del archivo no es una imagen válida");
+        }
+
+        String filenameSeguro = generarNombreSeguro(filename);
+
+        Path uploadPath = Paths.get(uploadDir);
+
+        if (!Files.exists(uploadPath)) {
+            Files.createDirectories(uploadPath);
+        }
+        Files.copy(archivo.getInputStream(), uploadPath.resolve(filenameSeguro));
+
+        pelicula.setAfichePath(filenameSeguro);
+        peliculaRepo.save(pelicula);
+
+        return "redirect:/";
+    }
+```
 
 ## Verificación de la mitigación
 
 Se repitió la PoC original con el mismo payload.
 
-### Resultado
-El ataque ya no funciona porque...
+El ataque ya no funciona ya que por parte del frontend no se aceptan archivos que no correspondan a un tipo de imagen. Además, en caso de que se consiga cargar una imagen corrupta, el backend se encarga de validar que la imagen subida pase las diferentes validaciones mencionadas anteriormente.
 
 ---
 # Ejercicio 4 - Server Side Template Injection
@@ -171,7 +336,7 @@ Explicación de dónde está y por qué ocurre.
 
 ## Prueba de concepto (PoC)
 
-### Pasos para explotar
+### Pasos para explotar vulnerabilidad
 1. ...
 2. ...
 3. ...
@@ -179,7 +344,7 @@ Explicación de dónde está y por qué ocurre.
 ### Payload utilizado
 ...
 
-### Resultado
+### Resultado de la explotación
 ...
 
 ## Mitigación
@@ -195,9 +360,6 @@ Explicación de los cambios realizados.
 ## Verificación de la mitigación
 
 Se repitió la PoC original con el mismo payload.
-
-### Resultado
-El ataque ya no funciona porque...
 
 ---
 # Ejercicio 5 - Almacenamiento inseguro
@@ -208,7 +370,7 @@ Explicación de dónde está y por qué ocurre.
 
 ## Prueba de concepto (PoC)
 
-### Pasos para explotar
+### Pasos para explotar vulnerabilidad
 1. ...
 2. ...
 3. ...
@@ -216,7 +378,7 @@ Explicación de dónde está y por qué ocurre.
 ### Payload utilizado
 ...
 
-### Resultado
+### Resultado de la explotación
 ...
 
 ## Mitigación
@@ -232,9 +394,6 @@ Explicación de los cambios realizados.
 ## Verificación de la mitigación
 
 Se repitió la PoC original con el mismo payload.
-
-### Resultado
-El ataque ya no funciona porque...
 
 ---
 ## Referencias
@@ -247,3 +406,12 @@ El ataque ya no funciona porque...
 ### Ejercicio 2
 - https://owasp.org/www-community/attacks/xss/
 - https://flask.palletsprojects.com/es/stable/templating/
+
+### Ejercicio 3
+- 
+
+### Ejercicio 4
+- 
+
+### Ejercicio 5
+- 
