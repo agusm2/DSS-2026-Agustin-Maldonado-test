@@ -14,7 +14,7 @@ Esta vulnerabilidad tiene lugar ya que la entrada del usuario se inyecta en la c
 
 ### Payload utilizado
 
-```bash
+```SQL
 '--
 ```
 
@@ -332,34 +332,97 @@ El ataque ya no funciona ya que por parte del frontend no se aceptan archivos qu
 
 ## Vulnerabilidad encontrada
 
-Explicación de dónde está y por qué ocurre.
+La vulnerabilidad se encuentra dentro de la búsqueda de FuncionController.java. El input ingresado por el usuario es enviado a spelEval.evaluate(buscar); dentro de SpelEvaluator.java, el valor es interpretado como una expresión SpEL en lugar de ser interpretado como texto.
 
 ## Prueba de concepto (PoC)
 
 ### Pasos para explotar vulnerabilidad
-1. ...
-2. ...
-3. ...
+1. Ingresar el payload en el buscador
+2. Hacer click en "Buscar"
+3. Observar "Resultados buscando por:"
 
 ### Payload utilizado
-...
+
+```md
+7*7
+```
 
 ### Resultado de la explotación
-...
+
+Al ingresar 7*7 el servidor interpreta la entrada como una expresión y devuelve 49 en lugar de tratarlo como un string; confirmando que el input está siendo evaluado en el servidor.
 
 ## Mitigación
 
-Explicación de los cambios realizados.
+Se modificó FuncionController.java para que por parte del servidor no se evalúe el input del usuario, sino que solamente se interprete como texto.
 
 ### Código vulnerable
-...
+```java
+@GetMapping("/")
+public String search(@RequestParam(required = false) String buscar, Model model) {
+
+    model.addAttribute("query", buscar != null ? buscar : "");
+
+    if (buscar == null || buscar.isBlank()) {
+        System.out.println("buscar es: " + buscar);
+        // Mostrar todas las funciones si no hay busqueda
+        List<Funcion> todas = funcionRepo.findAll();
+        model.addAttribute("resultados", todas);
+        model.addAttribute("mensaje", "Mostrando todas las funciones.");
+        return "index";
+    }
+
+    String spelResultado = spelEval.evaluate(buscar);
+```
 
 ### Código mitigado
-...
+```java
+@Controller
+public class FuncionController {
+
+    private final FuncionRepository funcionRepo;
+
+    @Autowired
+    public FuncionController(FuncionRepository funcionRepo) {
+        this.funcionRepo = funcionRepo;
+    }
+
+    @GetMapping("/")
+    public String search(@RequestParam(required = false) String buscar, Model model) {
+
+        model.addAttribute("query", buscar != null ? buscar : "");
+
+        if (buscar == null || buscar.isBlank()) {
+            List<Funcion> todas = funcionRepo.findAll();
+
+            model.addAttribute("resultados", todas);
+            model.addAttribute("mensaje", "Mostrando todas las funciones.");
+
+            return "index";
+        }
+
+        List<Funcion> resultados = funcionRepo.findAll().stream()
+            .filter(f -> f.getNombreFuncion() != null &&
+                         f.getNombreFuncion().toLowerCase().contains(buscar.toLowerCase()))
+            .collect(Collectors.toList());
+
+            if(!resultados.isEmpty()) {
+                model.addAttribute("resultados", resultados);
+                model.addAttribute("mensaje", "Resultados buscando por: " + buscar);
+            } else {
+                model.addAttribute("resultados", new ArrayList<Funcion>());
+                model.addAttribute("mensaje", "No se encontraron coincidencias.");
+            }
+
+        return "index";
+    }
+}
+```
 
 ## Verificación de la mitigación
 
 Se repitió la PoC original con el mismo payload.
+
+Ahora, al momento de la búsqueda e interpretar al parámetro de buscar solamente como texto, la aplicación muestra literalmente el resultado de buscar 7*7, mostrando como resultado que no hay coincidencias; por lo que la entrada del usuario ya no se toma como una expresión a evaluar por el servidor.
 
 ---
 # Ejercicio 5 - Almacenamiento inseguro
@@ -411,7 +474,8 @@ Se repitió la PoC original con el mismo payload.
 - 
 
 ### Ejercicio 4
-- 
+- https://cwe.mitre.org/data/definitions/917.html
+- https://portswigger.net/web-security/server-side-template-injection
 
 ### Ejercicio 5
 - 
