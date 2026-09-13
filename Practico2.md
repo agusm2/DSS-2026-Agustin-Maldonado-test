@@ -25,7 +25,7 @@ Como resultado se obtuvieron todas las funciones de la base de datos.
 ## Mitigación
 
 Para mitigar esta vulnerabilidad, se parametrizo la consulta SQL vulnerable. Se reemplazo la entrada directa del usuario por un placeholder (?) y posteriormente se paso ese valor como parametro para ejecutar la consulta.
-De esta manera, SQLite interpreta la entrada del usuario como un dato y no como parte del sintaxis SQL.
+De esta manera, SQLite interpreta la entrada del usuario como un dato y no como parte de la sintaxis SQL.
 
 ### Código vulnerable
 ```bash
@@ -123,7 +123,7 @@ Para mitigar esta vulnerabilidad, podemos eliminar el filtro de "safe" dentro de
 
 Se repitió la PoC original con el mismo payload; ahora el mismo aparece como texto plano y no figura ninguna alerta, evitando la ejecución de código JavaScript.
 
-El ataque ya no funciona por el hecho de que se eliminó el filtro "safe" en el campo de Descripción, de esta manera, Jinja no asume que el código es seguro y aplica autoescaping, escapando los carcteres especiales utilizados en HTML, como '<' y '>' en este caso.
+El ataque ya no funciona por el hecho de que se eliminó el filtro "safe" en el campo de Descripción, de esta manera, Jinja no asume que el código es seguro y aplica autoescaping, escapando los caracteres especiales utilizados en HTML, como '<' y '>' en este caso.
 
 ---
 # Ejercicio 3 - File Upload
@@ -158,7 +158,7 @@ Como resultado, al ingresar a "http://127.0.0.1:8080/uploads/afiche.html" nos sa
 En el archivo de upload.html, se modificó el campo de accept en el form que carga el afiche, de esta manera, solamente permite archivos de tipo imagen como pueden ser .png, .jpg y .jpeg.
 Por otra parte, en PeliculaController.java, se introducieron diversas validaciones:
 - Se creó una allowlist con extensiones permitidas, siendo las mismas que las introducidas en upload.html
-- Se validó el tipo MIME del archivo para comprobar que corresponda a una formato de imagen permitido
+- Se validó el tipo MIME del archivo para comprobar que corresponda a un formato de imagen permitido
 - Se verificó que el contenido real del archivo pueda ser interpretado como una imagen válida, evitando confiar únicamente en su nombre o extensión
 - Se generó un nombre de forma aleatoria, para evitar riesgos asociados a nombres manipulados.
 
@@ -239,7 +239,7 @@ Por otra parte, en PeliculaController.java, se introducieron diversas validacion
             return false;
         }
 
-        String[] mimesPermitidos = {"image/jpeg", "image/png", "image/gif"};
+        String[] mimesPermitidos = {"image/jpeg", "image/png"};
         for (String mime : mimesPermitidos) {
             if (contentType.equalsIgnoreCase(mime)) {
                 return true;
@@ -429,34 +429,128 @@ Ahora, al momento de la búsqueda e interpretar al parámetro de buscar solament
 
 ## Vulnerabilidad encontrada
 
-Explicación de dónde está y por qué ocurre.
+La vulnerabilidad se da debido a que la aplicación guarda las contraseñas con un cifrado reversible; por lo que cualquier atacante con acceso al código fuente puede acceder a las contraseñas cifradas mediante decrypt().
+Podemos ver esto específicamente en las líneas 36 y 68 de AuthController.java; además de en la línea 22 de EncryptionService.java
 
 ## Prueba de concepto (PoC)
 
 ### Pasos para explotar vulnerabilidad
-1. ...
-2. ...
-3. ...
+1. Registrar un usuario con contraseña conocida
+2. Obtener el valor de cifrado mostrado por la aplicación
+3. Localizar clave de cifrado
+4. Obtener clave efectiva utilizada por AES
+5. Descifrar contraseña con OpenSSL
 
 ### Payload utilizado
-...
+```bash
+printf '%s' 'xwJeAskCpxdDfGLFoCrAEQ==' \
+| openssl enc -aes-256-ecb -d -a -A \
+-K 4D7953757033725333637233744B3379213230323443696E654275736361646F
+```
 
 ### Resultado de la explotación
-...
+
+Como resultado de la explotación obtenemos la contraseña conocida registrada por el usuario.
 
 ## Mitigación
 
-Explicación de los cambios realizados.
+Se dejó de utilizar la clase de EncryptionService.java para cifrar las contraseñas y se reemplazó el cifrado AES por hashing mediante BCrypt.
+Además, en AuthController.java, se compara la contraseña ingresada con el hash almacenado.
+También se agregó un encoder para que no sea necesario descifrar ni recuperar la contraseña original.
+
 
 ### Código vulnerable
-...
+- AuthController.java
+```java
+String decryptedPassword = EncryptionService.decrypt(user.getPassword());
+```
+
+```java
+nuevoUsuario.setPassword(EncryptionService.encrypt(password));
+```
+
+- EncryptionService.java
+```java
+private static final String SECRET_KEY = "MySup3rS3cr3tK3y!2024CineBuscadorAES";
+```
 
 ### Código mitigado
-...
+Se dejó de utilizar la clase EncryptionService.java
+
+```java
+public class AuthController {
+
+    private final UserRepository userRepository;
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+
+
+    public AuthController(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+
+    // ==================== LOGIN PAGE ====================
+    @GetMapping("/")
+    public String loginPage(Model model) {
+        model.addAttribute("loginForm", new LoginForm());
+        model.addAttribute("registerForm", new RegisterForm());
+        return "index";
+    }
+
+    // ==================== LOGIN ====================
+    @PostMapping("/login")
+    public String login(@RequestParam String username, @RequestParam String password, Model model) {
+        User user = userRepository.findByUsername(username).orElse(null);
+
+        if (user != null) {
+            //Descifrar la contraseña almacenada y comparar con la ingresada
+            //String decryptedPassword = EncryptionService.decrypt(user.getPassword());
+            if (passwordEncoder.matches(password, user.getPassword())) {
+                model.addAttribute("loginSuccess", true);
+                model.addAttribute("welcomeUser", username);
+                addForms(model);
+                return "index";
+            }
+        }
+        model.addAttribute("loginError", "Usuario o contraseña incorrecta");
+        addForms(model);
+        return "index";
+    }
+
+    // ==================== REGISTER ====================
+    @PostMapping("/register")
+    public String register(@RequestParam String username, @RequestParam String password,
+                           @RequestParam String confirmPwd, Model model) {
+        if (!password.equals(confirmPwd)) {
+            model.addAttribute("registerError", "Las contraseñas no coinciden");
+            addForms(model);
+            return "index";
+        }
+
+        if (userRepository.findByUsername(username).isPresent()) {
+            model.addAttribute("registerError", "El usuario ya existe");
+            addForms(model);
+            return "index";
+        }
+
+        User nuevoUsuario = new User();
+        nuevoUsuario.setUsername(username);
+        nuevoUsuario.setPassword(passwordEncoder.encode(password));
+
+        userRepository.save(nuevoUsuario);
+
+        model.addAttribute("registerSuccess", true);
+        model.addAttribute("registeredUsername", username);
+
+        addForms(model);
+        return "index";
+    }
+}
+```
 
 ## Verificación de la mitigación
 
-Se repitió la PoC original con el mismo payload.
+Se registró nuevamente un usuario y se verificó que la contraseña almacenada corresponde a un hash BCrypt.
+También se probó que el inicio de sesión continúa funcionando mediante passwordEncoder.matches().
 
 ---
 ## Referencias
@@ -471,11 +565,14 @@ Se repitió la PoC original con el mismo payload.
 - https://flask.palletsprojects.com/es/stable/templating/
 
 ### Ejercicio 3
-- 
+- https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+- https://cwe.mitre.org/data/definitions/434.html
+- https://developer.mozilla.org/es/docs/Web/HTML/Reference/Attributes/accept
 
 ### Ejercicio 4
 - https://cwe.mitre.org/data/definitions/917.html
 - https://portswigger.net/web-security/server-side-template-injection
 
 ### Ejercicio 5
-- 
+- https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+- https://docs.spring.io/spring-security/reference/features/authentication/password-storage.html
