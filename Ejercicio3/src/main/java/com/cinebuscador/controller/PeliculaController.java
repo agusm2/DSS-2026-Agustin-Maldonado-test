@@ -14,12 +14,15 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.http.MediaType;
 import org.springframework.http.MediaTypeFactory;
+import org.springframework.http.ContentDisposition;
 import org.springframework.core.io.UrlResource;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.LinkOption;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -191,20 +194,63 @@ public class PeliculaController {
 
     @GetMapping("/uploads/{filename:.+}")
     @ResponseBody
-    public ResponseEntity<Resource> serveFile(@PathVariable String filename) throws IOException {
-        Path filePath = Paths.get(uploadDir).resolve(filename).normalize();
-        Resource resource = new UrlResource(filePath.toUri());
-        MediaType mediaType = MediaTypeFactory.getMediaType(resource)
-        .orElse(MediaType.APPLICATION_OCTET_STREAM);
+    public ResponseEntity<Resource> serveFile(
+        @PathVariable String filename) throws IOException {
 
-        if (!resource.exists()) {
+        // Validar el nombre del archivo
+        if (filename == null || filename.isBlank()
+            || filename.contains("/")
+            || filename.contains("\\")
+            || filename.equals(".")
+            || filename.equals("..")) {
+        return ResponseEntity.badRequest().build();
+        }
+
+        // Obtener la carpeta autorizada
+        Path uploadPath = Paths.get(uploadDir);
+
+        if (!Files.isDirectory(uploadPath)) {
             return ResponseEntity.notFound().build();
         }
 
+        // Obtener la ruta real de la carpeta de subida
+        Path baseDir = uploadPath.toRealPath();
+
+        // Construir la ruta
+        Path filePath = baseDir.resolve(filename).normalize();
+
+        // Evitar salir del directorio uploads
+        if (!filePath.startsWith(baseDir)) {
+            return ResponseEntity.badRequest().build();
+        }
+    
+
+        // Verificar que el archivo exista y sea accesible
+        if (!Files.isRegularFile(filePath, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isReadable(filePath)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // Verificar la ruta real
+        Path realPath = filePath.toRealPath();
+
+        if (!realPath.startsWith(baseDir)) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        Resource resource = new UrlResource(realPath.toUri());
+
+        // Servir el archivo como descarga
         return ResponseEntity.ok()
-            .contentType(mediaType)
-            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .header("X-Content-Type-Options", "nosniff")
+            .header(
+                HttpHeaders.CONTENT_DISPOSITION,
+                ContentDisposition.attachment()
+                    .filename(resource.getFilename(), StandardCharsets.UTF_8)
+                    .build()
+                    .toString()
+            )
             .body(resource);
     }
-
 }
